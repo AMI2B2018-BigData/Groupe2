@@ -1,0 +1,532 @@
+---
+title: "BigData"
+date: "4 janvier 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Apprentissage statistique : Cas logistique
+## Langage R
+
+## Chargement des packages R necessaires pour executer ce script
+
+
+```{r}
+rm(list=ls()) # Standard code to clear R's memory
+
+list.of.packages <- c("stringr", "glmnet", "randomForest", "rpart", "rpart.plot", "e1071", "ROCR", "AUC", "crayon")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages, repos='https://cran.univ-paris1.fr/', quiet = TRUE)
+
+sapply(list.of.packages, library, character.only = TRUE)
+```
+
+# Importation des donnees :
+
+```{r}
+filepath = file.choose(new = FALSE)
+sep = readline(prompt = "Enter the type of separator (;/,/tab/space) :")
+sep = str_to_lower(sep)
+while (sep != 'tab' && sep != 'space' && sep != ';' && sep != ',') {
+    sep = readline(prompt = "Enter the type of separator (;/,/tab/space) :")
+    sep = str_to_lower(sep)
+}
+if (sep == 'tab') {
+    sep = '\t'
+} else if (sep == 'space') {
+    sep = ' '
+}
+print(sep)
+```
+
+```{r}
+#filepath = "spam.csv" # filepath of your dataset
+data = read.table(file = filepath, header = TRUE, sep = sep)
+```
+
+```{r}
+total_rows = nrow(data)
+total_columns = ncol(data)
+title = names(data) # Récupération du noms des différentes variables
+```
+
+```{r}
+head(data)
+summary(data)
+```
+
+```{r}
+y = readline(prompt = "Enter the exact name of the response variable :")
+while (!(y %in% title))
+{
+  y <- readline(prompt = "This variable doesn't exist! Please make sure to enter the exact name: ")
+}
+print(y)
+```
+
+```{r}
+# Vérifier s'il y a une variable identifiant
+input4 = readline(prompt = "Vos données ont-elles une variable identifiant pour les individus ? (y/n) : ")     # ici : n
+# Passage en minuscule si l'utilisateur rentre Y ou N
+input4 = str_to_lower(input4)
+# Tant que l'utilisateur n'a pas rentré quelque chose de correct
+while (input4 != 'y' && input4 != 'n')
+{
+  input4 = readline(prompt = "Veuillez entrer y ou n : ")
+  input4 = str_to_lower(input4)
+}
+# S'il y en a une
+if (input4 == 'y')
+{
+  input5 = readline(prompt = "Indiquez le nom de la variable identifiant : ")
+  while (!(input5 %in% title) || input5 == y)
+  {
+    if (!(input5 %in% title))
+    {
+          input5 = readline(prompt = "Cette variable n'existe pas ! Veuillez vérifier son nom et essayer à nouveau : ")
+    } else if (input5 == y)
+    {
+      input5 = readline(prompt = "Il s'agit de la variable d'intérêt ! Veuillez vérifier et essayer à nouveau : ")
+    }
+    # On supprime cette variable
+  }
+  data = data[, ! names(data) %in% input5, drop = F]
+  total_columns = total_columns-1
+}
+```
+
+```{r}
+y = data[y]
+y_values = list(y)
+```
+
+Dimension de votre dataset
+
+```{r}
+cat(dim(data))
+```
+
+Visualisation du résumé de la variable d'intérêt
+
+```{r}
+classe = table(y)
+nb_classe = length(classe)
+
+cat("Différentes classes de la variable d'intérêt : ")
+classe
+cat("Nombre de classes : ", nb_classe)
+```
+
+```{r}
+input6 = readline(prompt = "Comment sont représentées les données manquantes dans votre dataset (s'il y en a) : ")
+# Recherche du nombre de données manquantes dans la matrice du dataset
+matrice_dataset = as.matrix(data)
+nb_NaN = 0
+for (i in 1:nrow(matrice_dataset))
+{
+    for (j in 1:ncol(matrice_dataset))
+    {
+        if (matrice_dataset[i,j] == input6)
+        {
+            nb_NaN = nb_NaN+1
+        }
+    }
+}
+cat("Nombre d'éléments manquants = " , nb_NaN)
+cat("\nNombre d'éléments dans la matrice = ", length(matrice_dataset))
+cat("\nRatio = ",nb_NaN/length(matrice_dataset))
+```
+
+```{r}
+tbl <- with(data, table(y))
+barplot(tbl, beside = TRUE, col = c("#F5A9A9", "#A9D0F5"), xlab = y, ylab = "count")
+```
+
+```{r}
+# On code la variable comme un facteur pour pouvoir implémenter les méthodes
+y <- factor(unlist(y))
+
+set.seed(1234)
+# Division du dataset
+index <- sample(1:total_rows, total_rows*(2/3)) 
+xTrain = data[index,]
+xTest =  data[-index,]
+# Vérifications
+cat("Dimension du dataset d'apprentissage : ", dim(xTrain))
+cat("\nDimension du dataset de test : ", dim(xTest))
+```
+
+```{r}
+# Récupération des variables explicatives du dataset apprentissage et du dataset test
+XTrain = as.data.frame(xTrain[,-total_columns])
+XTest = as.data.frame(xTest[,-(total_columns)])
+# Vérification
+cat("Dataset d'apprentissage : ", dim(XTrain))
+head(XTrain)
+
+cat("\nDataset test : ", dim(XTest))
+head(XTest)
+```
+
+```{r}
+# Isolation de la variable d'intérêt
+yTrain = xTrain[,total_columns]
+yTrain_values = list(yTrain)
+
+yTest = xTest[,total_columns]
+yTest_values = list(yTest)
+```
+
+```{r}
+# Vérification que les classes soient bien réparties dans les 2 datasets
+
+# Dataset apprentissage
+    # /!\ Représentation graphique ou juste afficher nb_occ, je sais pas
+tbl_app <- with(data, table(yTrain))
+barplot(tbl_app, beside = TRUE, col = c("#F5A9A9", "#A9D0F5"), xlab = "yTrain", ylab = "count")
+table(yTrain)
+
+# Dataset test
+tbl_test <- with(data, table(yTest))
+barplot(tbl_test, beside = TRUE, col = c("#F5A9A9", "#A9D0F5"), xlab = "yTest", ylab = "count")
+table(yTest)
+```
+
+```{r}
+yTrain = as.factor(yTrain)
+yTest = as.factor(yTest)
+levels(yTrain)[1]<-0
+levels(yTrain)[2]<-1
+levels(yTest)[1]<-0
+levels(yTest)[2]<-1
+summary(yTrain)
+summary(yTest)
+XTrain$y = yTrain
+XTest$y = yTest
+```
+
+## Regression Logistique
+
+```{r}
+fit.glm = glm(y ~ ., data = XTrain, family = "binomial")
+
+# Performance du modele
+pred.glm = predict(fit.glm, newdata = XTest) # prediction de classification
+(score.glm = mean(pred.glm != yTest)) # Erreur de prédiction
+probas = pred.glm
+pred.glm = rep(0, length(XTest$y))
+pred.glm[probas > 0.5] = 1
+cat("Erreur de classification")
+(classification_error = mean(pred.glm!=XTest$y))
+
+# Matrice de confusion
+print("Matrice de confusion :")
+table(true = yTest, pred = pred.glm)
+```
+
+## Random Forest
+
+```{r}
+tune.rf = tune(randomForest, y ~ ., data = XTrain, ranges = list(ntree = c(500, 2000, 10000), mtry = c(sqrt(total_columns-1), (total_columns-1)/2, sqrt(total_columns-1)/2)))
+tune.rf
+best.rf = tune.rf$best.model
+best.rf.params = tune.rf$best.parameters
+```
+
+```{r}
+cat("\ Nombre de vrais positifs : \n")
+best.rf$confusion[2,2]
+
+cat("\ Nombre de faux positifs : \n")
+best.rf$confusion[1,2]
+
+cat("\ Nombre de vrais negatifs : \n")
+best.rf$confusion[1,1]
+
+cat("\ Nombre de faux negatifs : \n")
+best.rf$confusion[2,1]
+
+cat("\ Erreur OOB : \n")
+(best.rf$confusion[2,1]+best.rf$confusion[1,2])/
+(best.rf$confusion[1,1]+best.rf$confusion[2,2]+best.rf$confusion[2,1]+best.rf$confusion[1,2])
+```
+
+### Classement des variables explicatives:
+
+```{r}
+par(mfrow = c(1,2))
+varImpPlot(best.rf, main = sprintf("Classement sur les %d covariables\n par importance\n", total_columns-1), cex.main = 0.8)
+```
+
+```{r}
+plot(best.rf$err.rate[, 1],type = "l", main = "Evolution de l'erreur OOB en fonction du nombre d'arbres", 
+     xlab = "nombre d'arbres", ylab = "erreur OOB", ylim = c(0.30, 0.50))
+```
+
+## CART
+
+```{r}
+m = c(10,20,30,40,50)
+error = rep(NA, length(m))
+minsplit_list = c("10","20","30","40","50")
+for (j in 1:length(m)) 
+{
+   cart = rpart(y~., data = XTrain,control=rpart.control(minsplit=m[j],cp=0,xval=10))
+   predict_cart = predict(cart, newdata = XTest,  type="class")
+   error[j] = mean(XTest$y != predict_cart)
+}
+error_CART = cbind(minsplit_list, error)
+plot(error_CART, main = "Evolution de l'erreur test estimee selon minsplit", col = 2)
+```
+
+```{r}
+(best.minsplit = error_CART[which.min(error_CART[,"error"]),"minsplit_list"])
+(best.minsplit = as.numeric(str_extract(best.minsplit, regex("\\d{2}"))))
+```
+
+```{r}
+t1 = rpart(y~., data = XTrain, control=rpart.control(minsplit=best.minsplit,cp=0,xval=10))
+print(t1)
+plot(t1)
+text(t1,cex=0.7)
+printcp(t1)
+plotcp(t1)
+```
+
+```{r}
+cat("La valeur de cp qui minimise la xerror est : ")
+(best.cp = t1$cptable[which.min(t1$cptable[,"xerror"]),"CP"])
+```
+
+```{r}
+tprune = prune(t1, cp = best.cp)
+rpart.plot(t1, extra = 1, main = "Arbre maximal")
+rpart.plot(tprune, extra = 1, main = "Arbre elague")
+```
+
+### Calcul de l'erreur test de l'arbre complet et l'arbre elague
+
+```{r}
+model_CART = rpart(y~., data = XTrain, control = rpart.control(minsplit = best.minsplit, cp = 0, xval = 10))
+pred.CART = predict(model_CART, newdata = XTest, type = "class")
+cat("\ Erreur test estimee pour model_CART : \n")
+(score.cart1 = mean(XTest$y != pred.CART))
+
+tprune_CART = prune(model_CART, cp = best.cp)
+pred.pruned.CART = predict(tprune_CART, newdata = XTest, type = "class")
+cat("\ Erreur test estimee pour tprune_CART : \n")
+(score.cart2 = mean(XTest$y != pred.pruned.CART))
+
+if (score.cart1 < score.cart2) {
+    best.cart = model_CART
+} else {
+    best.cart = tprune_CART
+}
+```
+
+## SVM
+### Kernel lineaire
+
+```{r}
+tune.svm.linear = tune(svm, y~., data = XTrain, kernel = "linear", ranges = list(cost = c(0.001, 0.01, 0.1, 1, 10)))
+tune.svm.linear
+best.svm.linear = tune.svm.linear$best.model
+best.svm.linear.perf = tune.svm.linear$best.performance
+```
+
+### Kernel radial
+
+```{r}
+tune.svm.radial = tune(svm, y~., data = XTrain, kernel = "radial", 
+                       ranges = list(cost = c(0.1, 1, 10), gamma = c(1e-05, 1e-04, 0.001, 0.01, 0.1)))
+tune.svm.radial
+best.svm.radial = tune.svm.radial$best.model
+best.svm.radial.perf = tune.svm.radial$best.performance
+```
+
+### Kernel polynomial
+
+```{r}
+tune.svm.poly = tune(svm, y~., data = XTrain, kernel = "polynomial", 
+                     ranges = list(degree = c(2,3,4), cost = c(0.001, 0.01, 0.1), gamma = c(0.0001, 0.001)))
+tune.svm.poly
+best.svm.poly = tune.svm.poly$best.model
+best.svm.poly.perf = tune.svm.poly$best.performance
+```
+
+### Kernel sigmoide
+
+```{r}
+tune.svm.sigmoid = tune(svm, y~., data = XTrain, kernel = "sigmoid", 
+                        ranges = list(cost = c(1, 10, 100, 1000), gamma = c(0.0001, 0.001, 0.01, 0.1)))
+tune.svm.sigmoid
+best.svm.sigmoid = tune.svm.sigmoid$best.model
+best.svm.sigmoid.perf = tune.svm.sigmoid$best.performance
+```
+
+### Determination du meilleur modele parmi les differents kernels
+
+```{r}
+perf = c(best.svm.linear.perf,best.svm.radial.perf,best.svm.poly.perf,best.svm.sigmoid.perf)
+best.svm.perf = perf[which.min(perf)]
+cat("Taux de mal classes : ")
+best.svm.perf
+if (best.svm.perf == tune.svm.linear$best.performance) {
+    best.svm = best.svm.linear
+} else if (best.svm.perf == tune.svm.radial$best.performance) {
+    best.svm = best.svm.radial
+} else if (best.svm.perf == tune.svm.poly$best.performance) {
+    best.svm = best.svm.poly
+} else if (best.svm.perf == tune.svm.sigmoid$best.performance) {
+    best.svm = best.svm.sigmoid
+}
+cat("Meilleur modele SVM : ")
+best.svm
+```
+
+### Calcul de l'erreur test
+
+```{r}
+table(true = XTest$y, pred = predict(best.svm, newdata = XTest))
+cat("\nErreur de prediction : \n")
+mean(XTest$y != predict(best.svm, newdata = XTest))
+```
+
+# Evaluation des methodes par courbes ROC
+
+```{r}
+### Regression Logistique
+model_RL = glm(y~., data=XTrain, family = "binomial")
+score.glm = predict(model_RL, newdata = XTest, type = "response")
+
+### Random forest
+model_RF = randomForest(y~., data = XTrain, ntree = best.rf.params$ntree, mtry = best.rf.params$mtry)
+score.rf = predict(model_RF, newdata = XTest, type = "prob")
+
+
+### CART
+# model_CART_non_el = rpart(y~., data = XTrain, control = rpart.control(minsplit = 30, cp = 0, xval = 10))
+# model_CART = prune(model_CART_non_el, cp = 0.048)
+model_CART = best.cart
+score.cart = predict(model_CART, newdata = XTest, type = "prob")
+
+### SVM
+if (best.svm$kernel == 0) {
+    best.svm$kernel = "linear"
+} else if (best.svm$kernel == 1) {
+    best.svm$kernel = "polynomial"
+}else if (best.svm$kernel == 2) {
+    best.svm$kernel = "radial"
+}else if (best.svm$kernel == 3) {
+    best.svm$kernel = "sigmoid"
+}
+
+model_svm = svm(y~., data = XTrain, kernel = sprintf("%s", best.svm$kernel), cost = sprintf("%s", best.svm$cost), 
+                gamma = sprintf("%s", best.svm$gammma), 
+                probability = TRUE, cross = 10)
+score.svm = predict(model_svm, newdata = XTest, probability = TRUE)
+score.svm = attr(score.svm, "probabilities") # probas de prediction
+
+# seuil s
+s=seq(0,1,.001)
+
+# Initialisation RL
+absc = numeric(length(s))
+ordo = numeric(length(s))
+
+# Initialisation RF
+absc2 = numeric(length(s))
+ordo2 = numeric(length(s))
+
+# Initialisation CART
+absc3 = numeric(length(s))
+ordo3 = numeric(length(s))
+
+# Initialisation SVM
+absc4 = numeric(length(s))
+ordo4 = numeric(length(s))
+
+# Courbe ROC : taux de vrais positifs (TPR) en fonction du taux de faux positifs (FPR)
+for (i in 1:length(s)){
+  ordo[i]=sum(score.glm>=s[i] & XTest$y == "1")/sum(XTest$y == "1")
+  absc[i]=sum(score.glm>=s[i] & XTest$y == "0")/sum(XTest$y == "0")
+  
+  ordo2[i]=sum(score.rf[,2]>=s[i] & XTest$y == "1")/sum(XTest$y == "1")
+  absc2[i]=sum(score.rf[,2]>=s[i] & XTest$y == "0")/sum(XTest$y == "0")
+  
+  ordo3[i]=sum(score.cart[,2]>=s[i] & XTest$y == "1")/sum(XTest$y == "1")
+  absc3[i]=sum(score.cart[,2]>=s[i] & XTest$y == "0")/sum(XTest$y == "0")
+  
+  ordo4[i]=sum(score.svm[,2]>=s[i] & XTest$y == "1")/sum(XTest$y == "1")
+  absc4[i]=sum(score.svm[,2]>=s[i] & XTest$y == "0")/sum(XTest$y == "0")
+}
+
+plot(absc,ordo,type = "l",xlab="FPR",ylab ="TPR",col="red", main = "Courbes ROC")
+lines(absc2,ordo2,col="blue")
+lines(absc3,ordo3,col="green")
+lines(absc4,ordo4,col="orange")
+lines(s,s, lty = 2)
+legend(x = 0.6, y = 0.4, c("Logistic Regression","Random Forest","CART","SVM"), text.col = c("red","blue","green","orange"))
+```
+
+## Calcul des aires sous la courbe ROC
+
+```{r}
+library(AUC)
+# creation d'un vecteur temporaire de la variable reponse car la fonction roc ne prend en compte que les labels 0 et 1.
+yyy = XTest$y
+levels(yyy)[levels(yyy)=="-1"]="0"
+
+cat("Regression Logistique : ")
+(auc.glm = auc(roc(score.glm, yyy)))
+cat("\nRandom Forest : ")
+(auc.rf = auc(roc(score.rf[,2], yyy)))
+cat("\nSVM : ")
+(auc.svm = auc(roc(score.svm[,2], yyy)))
+cat("\nCART : ")
+(auc.cart = auc(roc(score.cart[,2], yyy)))
+
+auc.best = c(auc.glm, auc.rf, auc.svm, auc.cart)[which.max(c(auc.glm, auc.rf, auc.svm, auc.cart))]
+```
+
+# Selection du meilleur modele
+
+```{r}
+if (auc.best == auc.glm) {
+    cat("\n Matrice de confusion de la Regression Logistique : \n")
+    table(true = XTest$y, predicted = predict(model_GLM, newdata = XTest))
+    best.model = model_RL
+} else if (auc.best == auc.rf) {
+    cat("\n Matrice de confusion de Random Forest : \n")
+    table(true = XTest$y, predicted = predict(model_RF, newdata = XTest))
+    best.model = model_RF
+} else if (auc.best == auc.svm) {
+    cat("\n Matrice de confusion de SVM : \n")
+    table(true = XTest$y, predicted = predict(model_SVM, newdata = XTest))
+    best.model = model_svm
+} else if (auc.best == auc.cart) {
+    cat("\ Matrice de confusion de CART : \n")
+    table(true = XTest$y, predicted = predict(model_CART, newdata = XTest, type = "class"))
+    best.model = model_CART
+}
+```
+
+# Prediction sur un nouveau dataset en utilisant le meilleur modele
+```{r}
+filepath_test = file.choose(new = FALSE) # dataset sur lequel on veut faire les predictions
+data_test = read.table(file = filepath_test, header = TRUE, sep = sep)
+
+pred.final = predict(best.model, newdata = data_test, type = "prob", probability = TRUE)
+head(pred.final)
+ypred = pred.final[,2]
+```
+
+```{r}
+output = readline(prompt = "Entrer le chemin du fichier de sorties : " )
+write.table(ypred, file = output, sep = "\t", fileEncoding = "utf8", 
+            row.names = FALSE, col.names = FALSE, dec = ".", quote = FALSE)
+```
+
